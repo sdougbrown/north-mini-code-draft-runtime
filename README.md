@@ -28,6 +28,25 @@ The draft package itself is the top-level `vllm serve` model. Its embedded
 speculators-format configuration is used natively; no external `Speculators`
 package, bridge, or separate target-model command is installed.
 
+### Serve from local verifier storage
+
+The release draft `config.json` embeds the verifier as a Hub ID
+(`speculators_config.verifier.name_or_path`), so vLLM re-downloads the target
+from the Hub on first load even when it is already local. To serve from a local
+directory instead, render a deployment bundle that overrides only that field:
+
+```bash
+# Point the verifier at a local copy of the target (must include its tokenizer).
+VERIFIER_MODEL=/models/North-Mini-Code-1.0-w4a16 RUNTIME_WORK="$MODEL_ROOT/.deploy" \
+  ./scripts/prepare-deployment-model.sh dflash
+# Set DFLASH_MODEL to the printed bundle path, e.g.:
+#   DFLASH_MODEL=/models/.deploy/dflash
+```
+
+The script writes a self-contained model directory (override `config.json` plus
+symlinked weights) under `RUNTIME_WORK/deploy/<flavor>`; it never modifies the
+release config. Leave `VERIFIER_MODEL` unset to keep the embedded Hub ID.
+
 ## Build a local image
 
 ```bash
