@@ -57,7 +57,10 @@ release config. Leave `VERIFIER_MODEL` unset to keep the embedded Hub ID.
 
 The build script clones and fetches only into ignored `.work/vllm`. It verifies
 the commit and patch hashes, then applies patches without 3-way or fuzz
-fallback. Next, it runs dependency-free source checks and builds vLLM's
+fallback. It compiles the CUDA kernels for the arch list in
+`TORCH_CUDA_ARCH_LIST` (default includes `sm121`/GB10 and `sm86`/RTX 3090), so
+the resulting image runs on both without a separate per-GPU build. Override it
+to tune the build; the image tag encodes the compiled arch list. Next, it runs dependency-free source checks and builds vLLM's
 `vllm-openai` target. It layers `Dockerfile.runtime` and verifies the patched
 model interface in the final image. It does not copy host native binaries or
 use a prebuilt local vLLM image. Set `RUN_SOURCE_PYTEST=1` only on a host that

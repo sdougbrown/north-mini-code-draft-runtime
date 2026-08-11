@@ -9,12 +9,21 @@ readonly VLLM_COMMIT="83ad767eed3be3ee7f2df63be693bfaca5c7c922"
 readonly REQUIRED_PATCH="$ROOT/patches/49819-cohere2moe-eagle3-aux-states.patch"
 readonly OPTIONAL_PATCH="$ROOT/patches/optional-command4-mixed-transition.patch"
 
+# CUDA arch coverage. Default includes 12.1 so one image runs on RTX 3090
+# (sm86), GB10 (sm121), and the wider Blackwell/Arm-family range. Override
+# with TORCH_CUDA_ARCH_LIST to tune the build. The resulting tag encodes the
+# arch list so published images can be identified by what they actually run on.
+readonly DEFAULT_ARCH_LIST='7.5 8.0 8.6 8.9 9.0 10.0 11.0 12.0 12.1'
+ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-$DEFAULT_ARCH_LIST}
+
 usage() {
   cat >&2 <<'EOF'
 Usage: scripts/build-image.sh [--with-command4-mixed-transition]
 
 Builds a local image only. Set VLLM_SOURCE_DIR (relative to .work/),
-RUNTIME_TAG, or RUNTIME_IMAGE to override local build names.
+RUNTIME_TAG, or RUNTIME_IMAGE to override local build names. Set
+TORCH_CUDA_ARCH_LIST to override the compiled CUDA arch list; the default
+includes sm121 (GB10) and sm86 (RTX 3090) so one image runs on both.
 EOF
   exit 64
 }
@@ -34,7 +43,7 @@ case "$SOURCE_REL" in
   *) echo "VLLM_SOURCE_DIR must be relative to .work/: $SOURCE_REL" >&2; exit 64 ;;
 esac
 SOURCE_DIR="$ROOT/$SOURCE_REL"
-RUNTIME_TAG=${RUNTIME_TAG:-"${VLLM_COMMIT}-49819"}
+RUNTIME_TAG=${RUNTIME_TAG:-"${VLLM_COMMIT}-49819-arch-${ARCH_LIST// /-}"}
 RUNTIME_IMAGE=${RUNTIME_IMAGE:-"north-mini-code-runtime:${RUNTIME_TAG}"}
 UPSTREAM_IMAGE="${RUNTIME_IMAGE}-vllm-openai-build"
 
@@ -98,6 +107,7 @@ fi
 # only layers Python requirements over that target; it copies no native output.
 docker build \
   --file "$SOURCE_DIR/docker/Dockerfile" \
+  --build-arg "torch_cuda_arch_list=$ARCH_LIST" \
   --target vllm-openai \
   --tag "$UPSTREAM_IMAGE" \
   "$SOURCE_DIR"
