@@ -1,0 +1,39 @@
+{
+  "build": {
+    "final_overlay": "Dockerfile.runtime",
+    "upstream_dockerfile": "docker/Dockerfile",
+    "upstream_target": "vllm-openai"
+  },
+  "patches": [
+    {
+      "local_cherry_pick_commit": "1fb63b52f12e5f41b3179b33c8a29e67e372188e",
+      "path": "patches/49819-cohere2moe-eagle3-aux-states.patch",
+      "pr_commit": "b7998e5bb3549883c015d12dbe073e72166feb83",
+      "required": true,
+      "sha256": "6874abd505e0470063f5c8ef54d89a80bb13a5813cf5b2d356432bcdf85ba321"
+    },
+    {
+      "build_flag": "--with-command4-mixed-transition",
+      "path": "patches/optional-command4-mixed-transition.patch",
+      "required": false,
+      "sha256": "996f667a32c3bbf11c7a3510c587cc5bf7a9b0e8599f67970636c3f7576d2896",
+      "status": "source-regression-only; no end-to-end speculative-serving validation"
+    }
+  ],
+  "python_packages": {
+    "not_installed": [
+      {
+        "name": "Speculators",
+        "reason": "Current vLLM reads speculators-format config natively; the served path does not import the external package."
+      }
+    ],
+    "required": [
+      "cohere_melody==0.12.0"
+    ]
+  },
+  "schema_version": 1,
+  "upstream": {
+    "commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922",
+    "repository": "https://github.com/vllm-project/vllm.git"
+  }
+}

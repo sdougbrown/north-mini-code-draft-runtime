@@ -1,0 +1,22 @@
+.env
+.work/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Model artifacts and training state never belong in this recipe.
+models/
+weights/
+checkpoints/
+*.safetensors
+*.safetensors.index.json
+*.bin
+*.pt
+*.pth
+*.ckpt
+optimizer*
+scheduler*
+trainer_state*
+events.out.tfevents*
+wandb/

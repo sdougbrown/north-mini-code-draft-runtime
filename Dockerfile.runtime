@@ -1,0 +1,9 @@
+# Small runtime-only overlay. The vLLM wheel/native extensions come exclusively
+# from the pinned upstream source build performed by scripts/build-image.sh.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+COPY requirements/runtime.txt /tmp/runtime.txt
+COPY scripts/healthcheck.py /opt/north-runtime/healthcheck.py
+RUN python3 -m pip install --no-cache-dir -r /tmp/runtime.txt \
+    && rm /tmp/runtime.txt

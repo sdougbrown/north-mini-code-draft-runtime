@@ -1,0 +1,12 @@
+{
+  "name": "49819-cohere2moe-eagle3-aux-states.patch",
+  "required": true,
+  "upstream_repository": "https://github.com/vllm-project/vllm.git",
+  "base_commit": "83ad767eed3be3ee7f2df63be693bfaca5c7c922",
+  "upstream_pr": "https://github.com/vllm-project/vllm/pull/49819",
+  "pr_head_commit": "b7998e5bb3549883c015d12dbe073e72166feb83",
+  "locally_verified_cherry_pick_commit": "1fb63b52f12e5f41b3179b33c8a29e67e372188e",
+  "patch_sha256": "6874abd505e0470063f5c8ef54d89a80bb13a5813cf5b2d356432bcdf85ba321",
+  "purpose": "Add Cohere2MoE Eagle3 auxiliary hidden states required by North's self-contained DFlash and DSpark speculators.",
+  "notes": "The patch is a source export of the verified cherry-pick delta from base_commit to locally_verified_cherry_pick_commit."
+}

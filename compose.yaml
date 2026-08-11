@@ -1,0 +1,91 @@
+name: north-mini-code-draft-runtime
+
+x-runtime-common: &runtime-common
+  image: ${RUNTIME_IMAGE:?Run scripts/build-image.sh, then set its local image tag in RUNTIME_IMAGE.}
+  pull_policy: never
+  gpus: all
+  ipc: host
+  shm_size: ${SHM_SIZE:-16g}
+  environment:
+    HF_TOKEN: ${HF_TOKEN:-}
+    HF_HOME: /root/.cache/huggingface
+    VLLM_CACHE_ROOT: /root/.cache/vllm
+    TRITON_CACHE_DIR: /root/.triton
+    VLLM_USE_V2_MODEL_RUNNER: ${VLLM_USE_V2_MODEL_RUNNER:-1}
+  volumes:
+    - type: bind
+      source: ${MODEL_ROOT:?Set MODEL_ROOT to the host directory containing local models.}
+      target: /models
+      read_only: true
+    - type: volume
+      source: hf-cache
+      target: /root/.cache/huggingface
+    - type: volume
+      source: vllm-cache
+      target: /root/.cache/vllm
+    - type: volume
+      source: triton-cache
+      target: /root/.triton
+  healthcheck:
+    test: ["CMD", "python3", "/opt/north-runtime/healthcheck.py"]
+    interval: 15s
+    timeout: 5s
+    retries: 20
+    start_period: 120s
+  restart: unless-stopped
+
+services:
+  dflash:
+    <<: *runtime-common
+    profiles: [dflash]
+    ports:
+      - "${DFLASH_HOST_PORT:-8001}:8000"
+    command:
+      - ${DFLASH_MODEL:?Set DFLASH_MODEL to a /models path or Hugging Face Hub ID.}
+      - --served-model-name
+      - north-mini-code-dflash
+      - --tensor-parallel-size
+      - "${TP_SIZE:-1}"
+      - --max-model-len
+      - "${MAX_MODEL_LEN:-320000}"
+      - --gpu-memory-utilization
+      - "${GPU_MEMORY_UTILIZATION:-0.75}"
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - cohere_command4
+      - --reasoning-parser
+      - cohere_command4
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+
+  dspark:
+    <<: *runtime-common
+    profiles: [dspark]
+    ports:
+      - "${DSPARK_HOST_PORT:-8002}:8000"
+    command:
+      - ${DSPARK_MODEL:?Set DSPARK_MODEL to a /models path or Hugging Face Hub ID.}
+      - --served-model-name
+      - north-mini-code-dspark
+      - --tensor-parallel-size
+      - "${TP_SIZE:-1}"
+      - --max-model-len
+      - "${MAX_MODEL_LEN:-320000}"
+      - --gpu-memory-utilization
+      - "${GPU_MEMORY_UTILIZATION:-0.75}"
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - cohere_command4
+      - --reasoning-parser
+      - cohere_command4
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+
+volumes:
+  hf-cache:
+  vllm-cache:
+  triton-cache:

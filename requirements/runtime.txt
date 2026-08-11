@@ -1,0 +1,2 @@
+# Required by vLLM's Cohere Command 4 reasoning and tool parsers.
+cohere_melody==0.12.0

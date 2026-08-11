@@ -1,0 +1,157 @@
+diff --git a/tests/reasoning/test_command4_mixed_transition.py b/tests/reasoning/test_command4_mixed_transition.py
+new file mode 100644
+index 000000000..08cb1bb5b
+--- /dev/null
++++ b/tests/reasoning/test_command4_mixed_transition.py
+@@ -0,0 +1,62 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++"""Regression for a speculative batch crossing Command 4's phase boundary."""
++
++from vllm.reasoning.cohere_command_reasoning_parser import (
++    CohereCommand4ReasoningParser,
++)
++
++
++class TransitionTokenizer:
++    """Only the special-token decoding needed by this parser-boundary test."""
++
++    tokens = {
++        "<|START_THINKING|>": 1,
++        "<|END_THINKING|>": 2,
++        "<|CHATBOT_TOKEN|>": 3,
++        "<|START_ACTION|>": 4,
++    }
++    decoded = {
++        1: "<|START_THINKING|>",
++        2: "<|END_THINKING|>",
++        4: "<|START_ACTION|>",
++        18: ".",
++    }
++
++    def convert_tokens_to_ids(self, token: str) -> int:
++        return self.tokens.get(token, 0)
++
++    def get_vocab(self) -> dict[str, int]:
++        return {}
++
++    def decode(self, ids: list[int], skip_special_tokens: bool = False) -> str:
++        return "".join(self.decoded[token] for token in ids)
++
++
++def test_cmd4_preserves_structural_suffix_from_mixed_speculative_delta():
++    """[18, END_THINKING, START_ACTION] must enter the tool-parser phase intact."""
++    tokenizer = TransitionTokenizer()
++    parser = CohereCommand4ReasoningParser(tokenizer)
++
++    parser.extract_reasoning_streaming(
++        previous_text="",
++        current_text="<|START_THINKING|>",
++        delta_text="<|START_THINKING|>",
++        previous_token_ids=[],
++        current_token_ids=[1],
++        delta_token_ids=[1],
++    )
++    delta = parser.extract_reasoning_streaming(
++        previous_text="<|START_THINKING|>",
++        current_text="<|START_THINKING|>.",
++        delta_text=".",
++        previous_token_ids=[1],
++        current_token_ids=[1, 18, 2, 4],
++        delta_token_ids=[18, 2, 4],
++    )
++
++    assert delta is not None
++    assert delta.reasoning == "."
++    assert delta.content == "<|START_ACTION|>"
++    assert parser.extract_content_ids([18, 2, 4]) == [4]
+diff --git a/vllm/reasoning/cohere_command_reasoning_parser.py b/vllm/reasoning/cohere_command_reasoning_parser.py
+index 340f7e022..708a8851a 100644
+--- a/vllm/reasoning/cohere_command_reasoning_parser.py
++++ b/vllm/reasoning/cohere_command_reasoning_parser.py
+@@ -493,6 +493,7 @@ class BaseCohereCommandReasoningParser(ReasoningParser):
+         *args,
+         streaming_opts: PyFilterOptions,
+         unary_opts: PyFilterOptions,
++        preserve_mixed_reasoning_transition: bool = False,
+         **kwargs,
+     ):
+         super().__init__(tokenizer, *args, **kwargs)
+@@ -500,6 +501,7 @@ class BaseCohereCommandReasoningParser(ReasoningParser):
+         self.end_token_id = tokenizer.convert_tokens_to_ids("<|END_THINKING|>")
+         self.chatbot_token_id = tokenizer.convert_tokens_to_ids("<|CHATBOT_TOKEN|>")
+         self.unary_opts = unary_opts
++        self.preserve_mixed_reasoning_transition = preserve_mixed_reasoning_transition
+         self.melody_unary = PyFilter(unary_opts)
+         self.melody_streaming = PyFilter(streaming_opts)
+         # Citations extracted by the most recent ``extract_reasoning`` call.
+@@ -546,6 +548,24 @@ class BaseCohereCommandReasoningParser(ReasoningParser):
+         current_token_ids: Sequence[int],
+         delta_token_ids: Sequence[int],
+     ) -> DeltaMessage | None:
++        # A speculative batch can contain END_THINKING and the next structural
++        # trigger. DelegatingParser changes phase on END_THINKING, so retain the
++        # suffix as content for the tool parser rather than consuming it here.
++        transition_content = None
++        if (
++            self.preserve_mixed_reasoning_transition
++            and self.end_token_id in delta_token_ids
++        ):
++            end_index = list(delta_token_ids).index(self.end_token_id)
++            if end_index + 1 < len(delta_token_ids):
++                reasoning_ids = list(delta_token_ids[: end_index + 1])
++                content_ids = list(delta_token_ids[end_index + 1 :])
++                delta_text = self.model_tokenizer.decode(
++                    reasoning_ids, skip_special_tokens=False
++                )
++                transition_content = self.model_tokenizer.decode(
++                    content_ids, skip_special_tokens=False
++                )
+         r = self.melody_streaming.write_decoded(delta_text)
+         citations = _melody_citations_to_vllm(
+             getattr(r, "citations", None), self._position_to_source
+@@ -555,6 +575,7 @@ class BaseCohereCommandReasoningParser(ReasoningParser):
+             and r.reasoning is None
+             and not r.tool_calls
+             and not citations
++            and transition_content is None
+         ):
+             return None
+         # Always emit CohereDeltaMessage so citations reach the wire via
+@@ -563,8 +584,13 @@ class BaseCohereCommandReasoningParser(ReasoningParser):
+         # drops the field so the emitted shape matches plain
+         # :class:`DeltaMessage`
+         msg = CohereDeltaMessage()
++        content_parts = []
+         if r.content is not None:
+-            msg.content = r.content
++            content_parts.append(r.content)
++        if transition_content is not None:
++            content_parts.append(transition_content)
++        if content_parts:
++            msg.content = "".join(content_parts)
+         if r.reasoning is not None:
+             msg.reasoning = r.reasoning
+         if r.tool_calls:
+@@ -597,6 +623,13 @@ class BaseCohereCommandReasoningParser(ReasoningParser):
+         return result.reasoning, result.content
+ 
+     def extract_content_ids(self, input_ids: list[int]) -> list[int]:
++        if (
++            self.preserve_mixed_reasoning_transition
++            and self.end_token_id in input_ids
++        ):
++            end_index = input_ids.index(self.end_token_id)
++            if end_index + 1 < len(input_ids):
++                return input_ids[end_index + 1 :]
+         token_buf: list[int] = []
+         content_ids: list[int] = []
+         content_filter = PyFilter(self.unary_opts)
+@@ -712,5 +745,6 @@ class CohereCommand4ReasoningParser(BaseCohereCommandReasoningParser):
+             *args,
+             streaming_opts=PyFilterOptions().cmd4().stream_non_grounded_answer(),
+             unary_opts=PyFilterOptions().cmd4().no_tools(),
++            preserve_mixed_reasoning_transition=True,
+             **kwargs,
+         )
