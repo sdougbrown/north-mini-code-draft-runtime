@@ -1,20 +1,25 @@
 # North Mini Code draft runtime
 
-A source-built, local runtime recipe for North Mini Code DFlash and DSpark
-draft packages. It is **not** a published image. `compose.yaml` uses a local
-image tag and `pull_policy: never`. Compose therefore cannot fetch an
-unpublished image from a registry.
+A thin runtime for serving North Mini Code **DFlash** and **DSpark** draft
+packages, overlayed on the **official published vLLM image** so GB10 (arm64)
+and x86_64 both work with no source compilation.
 
-## What is pinned
+The image is built locally (tagged `pull_policy: never` in `compose.yaml`);
+once published to a registry it can also be pulled directly.
 
-- vLLM: `83ad767eed3be3ee7f2df63be693bfaca5c7c922`
-- Required patch: PR #49819 (`49819-cohere2moe-eagle3-aux-states.patch`)
-- Optional, source-regression-only patch: Command 4 mixed transition
-- Runtime Python dependency: `cohere_melody==0.12.0`
+## Base and patches
 
-`runtime-manifest.json` records the exact patch digests. See
-[PATCH_SCOPE.md](PATCH_SCOPE.md) for upstream/obsolete-overlay boundaries and
-validation limits.
+- Base: official `vllm/vllm-openai` at release **`v0.27.1`** (DFlash/DSpark
+  support and MRV2 thinking budgets are stock; nothing is compiled).
+- PR **#49819** — Cohere2MoE Eagle3 auxiliary hidden states (required by the
+  draft).
+- PR **#50937** — skip loading an empty expert bias (our checkpoints ship an
+  all-zero per-expert bias; releases predate the fix).
+- Runtime dependency: `cohere_melody==0.12.0`
+
+`runtime-manifest.json` records exact digests; see
+[PATCH_SCOPE.md](PATCH_SCOPE.md) for why these two are required but not
+upstream.
 
 ## Configure
 
@@ -47,28 +52,23 @@ The script writes a self-contained model directory (override `config.json` plus
 symlinked weights) under `RUNTIME_WORK/deploy/<flavor>`; it never modifies the
 release config. Leave `VERIFIER_MODEL` unset to keep the embedded Hub ID.
 
-## Build a local image
+## Build the local image
 
 ```bash
 ./scripts/build-image.sh
-# Only if deliberately evaluating the source-only parser regression:
-./scripts/build-image.sh --with-command4-mixed-transition
 ```
 
-The build script clones and fetches only into ignored `.work/vllm`. It verifies
-the commit and patch hashes, then applies patches without 3-way or fuzz
-fallback. It compiles the CUDA kernels for the arch list in
-`TORCH_CUDA_ARCH_LIST` (default includes `sm121`/GB10 and `sm86`/RTX 3090), so
-the resulting image runs on both without a separate per-GPU build. Override it
-to tune the build; the image tag encodes the compiled arch list. Next, it runs dependency-free source checks and builds vLLM's
-`vllm-openai` target. It layers `Dockerfile.runtime` and verifies the patched
-model interface in the final image. It does not copy host native binaries or
-use a prebuilt local vLLM image. Set `RUN_SOURCE_PYTEST=1` only on a host that
-can run the focused upstream pytest files before the build.
+The script selects the official base by host arch, fetches the two release
+files from the tagged vLLM source, applies the two patches as pure Python in a
+temp staging dir (outside the git repo), and `docker build`s the thin overlay.
+Nothing is compiled from source. Result example:
 
-The result is a local tag such as
-`north-mini-code-runtime:83ad767eed3be3ee7f2df63be693bfaca5c7c922-49819`.
-Set `RUNTIME_IMAGE` in `.env` if a different local tag is used.
+```
+north-mini-code-runtime:v0.27.1-49819-50937-arm64
+north-mini-code-runtime:v0.27.1-49819-50937-amd64
+```
+
+Set `BASE_IMAGE`, `VLLM_VERSION`, `RUNTIME_TAG`, or `RUNTIME_IMAGE` to override.
 
 ## Run one draft flavor
 
@@ -85,26 +85,16 @@ docker compose --profile dflash --profile dspark up -d
 Both services default to TP=1, `VLLM_USE_V2_MODEL_RUNNER=1`, and the Cohere
 Command 4 reasoning/tool parsers. They mount the configured model root
 read-only and persist caches in named volumes. They use all GPUs, host IPC, and
-health checks on separate host ports. The default GPU memory fraction is 0.75.
-This leaves unified-memory headroom on GB10; raise it only after a local startup
-gate.
+health checks on separate host ports. GPU memory fraction defaults to 0.75;
+lower it when sharing the accelerator.
 
 ## Verify and smoke test
 
 ```bash
-python3 scripts/verify-patches.py
-python3 -m unittest tests/test_runtime_static.py
-./scripts/smoke.sh dflash
-# Add --generate to submit one minimal completion after readiness.
+python3 -m unittest discover -s tests -v
+./scripts/smoke.sh dflash --generate
+./scripts/smoke.sh dspark --generate
 ```
 
-For source applicability, point verification at a clean checkout exactly at
-the pin:
-
-```bash
-python3 scripts/verify-patches.py --source .work/vllm
-```
-
-No GPU image build has occurred for this repository snapshot. As recorded in
-`PATCH_SCOPE.md`, unavailable CUDA flash-attention extensions blocked host
-pytest. This result is not end-to-end serving validation.
+Both DFlash K3 and DSpark K4 smoke tests have been run on NVIDIA GB10 (arm64)
+against the local deployment bundles.

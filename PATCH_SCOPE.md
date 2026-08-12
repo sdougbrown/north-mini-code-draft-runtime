@@ -1,16 +1,26 @@
-# Patch scope on the pinned current-main snapshot
+# Patch scope for the official-base runtime overlay
 
-See [docs/patch-scope.md](docs/patch-scope.md) for the detailed change-by-change table.
+The runtime is a **thin overlay on the official published `vllm/vllm-openai`
+image at release `v0.27.1`**. The base already carries stock DFlash/DSpark
+support and Model Runner V2 thinking budgets upstream, so nothing is compiled
+from source.
 
-The runtime pins vLLM at `83ad767eed3be3ee7f2df63be693bfaca5c7c922`.
-Basic North DFlash/DSpark support needs **PR #49819** on this pin. The patch adds Cohere2MoE auxiliary hidden-state export at the layer boundaries required by Eagle3 draft packages.
+Two small pure-Python patches are copied over the installed modules by
+`scripts/build-image.sh` (see `runtime-manifest.json` for digests):
 
-DSpark compatibility and the MRV2 thinking budget are already upstream on this
-pin. The zero-bias v0.25.1 overlay and the old DSpark bridge are obsolete on
-this pin and are intentionally not carried. Deterministic Marlin #48032 is omitted because it affects training reproducibility, not serving.
+- **PR #49819** — Cohere2MoE Eagle3 auxiliary hidden states. Required: the North
+  DFlash/DSpark speculator reads verifier hidden states that stock Cohere2MoE
+  never exposes.
+- **PR #50937** — Skip loading an empty/unused expert bias when the model has no
+  bias param. North checkpoints ship an all-zero per-expert bias; every released
+  vLLM predates this fix, so without it target weight loading raises
+  `AttributeError: 'RoutedExperts' object has no attribute 'w2_bias'`.
 
-The optional Command 4 repair currently has only source-level regression-test coverage. Enable it with
-`--with-command4-mixed-transition`. End-to-end speculative-serving validation
-remains pending.
+Both are absent from released vLLM purely by timing (our own open PR, and a
+post-release bugfix respectively). They are pure Python, render against the
+release files cleanly, and work identically on x86_64 and arm64/GB10.
 
-PR #49819 cherry-picks cleanly. Host pytest did not run because the environment lacked CUDA flash-attention extensions. No GPU image build has occurred.
+The deterministic-Marlin repro concern (#48032) affects training
+reproducibility, not serving, and is intentionally not carried. The former
+Command 4 source patch and the v0.25.1 local overlay are obsolete on this base
+and removed.

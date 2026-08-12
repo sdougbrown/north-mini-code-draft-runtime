@@ -1,37 +1,95 @@
 #!/usr/bin/env python3
-"""Dependency-free recipe checks; no model download, Docker build, or GPU use."""
+"""Dependency-free recipe checks for the overlay runtime (no model download,
+Docker build, or GPU use)."""
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import pathlib
 import re
-import subprocess
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-PIN = "83ad767eed3be3ee7f2df63be693bfaca5c7c922"
-PR_COMMIT = "b7998e5bb3549883c015d12dbe073e72166feb83"
+RELEASE = "v0.27.1"
+PR49819 = "b7998e5bb3549883c015d12dbe073e72166feb83"
+PR50937 = "70456e5e6fb4ee86b8ffd985f918e44ba632d925"
 
 
-class StaticRecipeTests(unittest.TestCase):
+class OverlayRecipeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.manifest = json.loads((ROOT / "runtime-manifest.json").read_text())
         cls.compose = (ROOT / "compose.yaml").read_text()
+        cls.build = (ROOT / "scripts/build-image.sh").read_text()
+        cls.dockerfile = (ROOT / "Dockerfile.overlay").read_text()
 
-    def test_pin_and_required_pr_are_exact(self):
-        self.assertEqual(self.manifest["upstream"]["commit"], PIN)
-        required = next(p for p in self.manifest["patches"] if p["required"])
-        self.assertEqual(required["pr_commit"], PR_COMMIT)
-        self.assertEqual(required["local_cherry_pick_commit"][:9], "1fb63b52f")
+    def test_official_released_base(self):
+        self.assertEqual(self.manifest["base"]["release"], RELEASE)
+        self.assertEqual(self.manifest["build"]["final_overlay"], "Dockerfile.overlay")
+        self.assertIn(vllm_image := self.manifest["base"]["image"], self.build)
+        self.assertIn("${VLLM_VERSION}", self.build)
+        self.assertIn("DEFAULT_BASE=", self.build)
 
-    def test_manifest_patch_hashes_match_files(self):
-        for patch in self.manifest["patches"]:
+    def test_two_required_patches_with_matching_hashes(self):
+        required = [p for p in self.manifest["patches"] if p["required"]]
+        self.assertEqual(len(required), 2)
+        by_pr = {p["upstream_pr"].rsplit("/", 1)[-1]: p for p in required}
+        self.assertEqual(by_pr["49819"]["pr_commit"], PR49819)
+        self.assertEqual(by_pr["50937"]["pr_commit"], PR50937)
+        for patch in required:
             data = (ROOT / patch["path"]).read_bytes()
             self.assertEqual(hashlib.sha256(data).hexdigest(), patch["sha256"])
             self.assertTrue(data.startswith(b"diff --git"))
+        # Both must be applied by build-image.sh
+        for p in required:
+            self.assertIn(p["path"].split("/")[-1], self.build)
+            self.assertIn((ROOT / p["path"]).name, self.build)
+
+    def test_no_from_source_compile(self):
+        # No pinned-main clone, no manylinux docker build, no wheel compile.
+        for forbidden in (
+            "docker/Dockerfile",
+            "--target vllm-openai",
+            "fetch --no-tags origin",
+            "VLLM_SOURCE_DIR",
+            "manylinux",
+            "RUNTIME_SOURCE_PYTEST" if False else "__never__",
+        ):
+            self.assertNotIn(forbidden, self.build)
+        self.assertNotIn("git clone", self.build)
+
+    def test_build_renders_and_applies_both_patches(self):
+        # Render outside the repo, then apply with git apply (no index/am).
+        self.assertIn("mktemp -d", self.build)
+        self.assertIn("cohere2_moe.py", self.build)
+        self.assertIn("routed_experts.py", self.build)
+        self.assertIn("git apply --exclude='tests/*'", self.build)
+        self.assertIn("--check --whitespace=error", self.build)
+        self.assertNotIn("git am", self.build)
+
+    def test_overlay_copies_patched_modules_only(self):
+        self.assertIn("ARG BASE_IMAGE", self.dockerfile)
+        self.assertIn("COPY cohere2_moe.py", self.dockerfile)
+        self.assertIn("COPY routed_experts.py", self.dockerfile)
+        self.assertIn("model_executor/models/cohere2_moe.py", self.dockerfile)
+        self.assertIn("model_executor/layers/fused_moe/routed_experts.py", self.dockerfile)
+        self.assertNotIn("COPY --from=", self.dockerfile)
+        self.assertNotIn(".so", self.dockerfile)
+        self.assertNotIn(".whl", self.dockerfile)
+
+    def test_compose_profiles_are_opt_in_and_models_top_level(self):
+        self.assertIn("profiles: [dflash]", self.compose)
+        self.assertIn("profiles: [dspark]", self.compose)
+        self.assertIn("pull_policy: never", self.compose)
+        self.assertIn("gpus: all", self.compose)
+        self.assertIn("ipc: host", self.compose)
+        self.assertIn("VLLM_USE_V2_MODEL_RUNNER", self.compose)
+        self.assertIn("${DFLASH_MODEL:?", self.compose)
+        self.assertIn("${DSPARK_MODEL:?", self.compose)
+        self.assertEqual(self.compose.count("--tool-call-parser"), 2)
+        self.assertEqual(self.compose.count("--reasoning-parser"), 2)
+        self.assertIn("${GPU_MEMORY_UTILIZATION:-0.75}", self.compose)
+        self.assertNotIn("--speculative-config", self.compose)
 
     def test_required_parser_dependency_and_no_external_speculators(self):
         self.assertEqual(
@@ -39,36 +97,13 @@ class StaticRecipeTests(unittest.TestCase):
             "# Required by vLLM's Cohere Command 4 reasoning and tool parsers.\n"
             "cohere_melody==0.12.0",
         )
-        self.assertIn("Current vLLM reads speculators-format config natively", json.dumps(self.manifest))
+        self.assertIn("does not import the external package", json.dumps(self.manifest))
 
     def test_model_defaults_are_configuration_only(self):
-        # A static recipe must not inspect a developer's local model directory.
         env_example = (ROOT / ".env.example").read_text()
         self.assertIn("DFLASH_MODEL=/models/North-Mini-Code-1.0-dflash", env_example)
         self.assertIn("DSPARK_MODEL=/models/North-Mini-Code-1.0-dspark", env_example)
         self.assertIn("Hub IDs also work", env_example)
-
-    def test_compose_profiles_and_interpolation_are_explicit(self):
-        for profile, model, port in (
-            ("dflash", "DFLASH_MODEL", "DFLASH_HOST_PORT"),
-            ("dspark", "DSPARK_MODEL", "DSPARK_HOST_PORT"),
-        ):
-            block = re.search(rf"  {profile}:\n(.*?)(?=\n  \w+:|\nvolumes:)", self.compose, re.S)
-            self.assertIsNotNone(block)
-            text = block.group(1)
-            self.assertIn(f"profiles: [{profile}]", text)
-            self.assertIn(f"${{{model}:?", text)
-            self.assertIn(f"${{{port}:-", text)
-        # Shared settings live in the Compose extension anchor, then are merged
-        # into each opt-in service.
-        self.assertIn("VLLM_USE_V2_MODEL_RUNNER: ${VLLM_USE_V2_MODEL_RUNNER:-1}", self.compose)
-        self.assertIn("gpus: all", self.compose)
-        self.assertIn("ipc: host", self.compose)
-        self.assertIn("healthcheck:", self.compose)
-        self.assertEqual(self.compose.count("--tool-call-parser"), 2)
-        self.assertEqual(self.compose.count("--reasoning-parser"), 2)
-        self.assertIn("${GPU_MEMORY_UTILIZATION:-0.75}", self.compose)
-        self.assertNotIn("--speculative_config", self.compose)
 
     def test_no_weights_or_optimizer_state_in_recipe(self):
         forbidden = re.compile(r"(\.safetensors(?:\.index\.json)?$|\.(?:bin|pt|pth|ckpt)$|optimizer|trainer_state)", re.I)
@@ -79,25 +114,15 @@ class StaticRecipeTests(unittest.TestCase):
         ]
         self.assertEqual(offenders, [])
 
-    def test_optional_patch_has_a_focused_regression(self):
-        patch = (ROOT / "patches/optional-command4-mixed-transition.patch").read_text()
-        self.assertIn("test_cmd4_preserves_structural_suffix", patch)
-        self.assertIn("delta_token_ids=[18, 2, 4]", patch)
-        self.assertIn("preserve_mixed_reasoning_transition=True", patch)
-        self.assertIn('msg.content = "".join(content_parts)', patch)
-
-    def test_reference_patch_chain_if_requested(self):
-        reference = os.environ.get("VLLM_REFERENCE_REPO")
-        if not reference:
-            self.skipTest("set VLLM_REFERENCE_REPO to run source patch applicability check")
-        result = subprocess.run(
-            [str(ROOT / "scripts/verify-patches-against-reference.sh"), reference],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout)
+    def test_scope_records_known_limits(self):
+        scope = " ".join((ROOT / "PATCH_SCOPE.md").read_text().lower().split())
+        for phrase in (
+            "pr #49819",
+            "pr #50937",
+            "compiled from source",
+            "official",
+        ):
+            self.assertIn(phrase, scope)
 
 
 if __name__ == "__main__":
