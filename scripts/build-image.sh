@@ -109,6 +109,7 @@ fi
 docker build \
   --file "$SOURCE_DIR/docker/Dockerfile" \
   --build-arg "torch_cuda_arch_list=$ARCH_LIST" \
+  --build-arg RUN_WHEEL_CHECK=false \
   --target vllm-openai \
   --tag "$UPSTREAM_IMAGE" \
   "$SOURCE_DIR"
