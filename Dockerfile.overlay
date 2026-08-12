@@ -1,0 +1,41 @@
+# Thin overlay on the official published vLLM image.
+#
+# - Base: official vllm/vllm-openai (released version), which already includes
+#   DSpark and Model Runner V2 thinking-budget support upstream.
+# - Overlay: the only non-upstream fix is PR #49819 (Cohere2MoE Eagle3 auxiliary
+#   hidden states), a pure-Python change to vllm/model_executor/models/cohere2_moe.py.
+#   It is rendered into a patched file by scripts/build-image.sh and copied over
+#   the installed package here. No CUDA/source compilation happens; the wheel and
+#   native kernels come from the official base, unchanged.
+#
+# Build context is a small staging dir produced by scripts/build-image.sh, so
+# nothing else from the repo is sent to the daemon.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+COPY runtime.txt /tmp/runtime.txt
+COPY healthcheck.py /opt/north-runtime/healthcheck.py
+COPY cohere2_moe.py /tmp/cohere2_moe.patched.py
+
+# Overlay the patched module into the installed vLLM site-packages.
+RUN python3 - <<'PY'
+import os, shutil, vllm
+dst = os.path.join(os.path.dirname(vllm.__file__),
+                   "model_executor", "models", "cohere2_moe.py")
+src = "/tmp/cohere2_moe.patched.py"
+os.chmod(dst, 0o644)
+shutil.copy(src, dst)
+print("overlayed cohere2_moe.py ->", dst)
+PY
+
+# Runtime-only deps (does not touch vLLM's wheel or native extensions).
+RUN python3 -m pip install --no-cache-dir -r /tmp/runtime.txt \
+    && rm /tmp/runtime.txt
+
+# Verify the patched interface is importable in the final image.
+RUN python3 - <<'PY'
+from vllm.model_executor.models.cohere2_moe import Cohere2MoeForCausalLM
+from vllm.model_executor.models.interfaces import supports_eagle3
+assert supports_eagle3(Cohere2MoeForCausalLM)
+print("final image Cohere2MoE Eagle3 import passed")
+PY
