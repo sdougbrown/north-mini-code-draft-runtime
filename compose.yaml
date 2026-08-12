@@ -53,8 +53,12 @@ services:
       - --enable-auto-tool-choice
       - --tool-call-parser
       - cohere_command4
-      - --reasoning-parser
-      - cohere_command4
+      - --tokenizer-mode
+      - cohere
+      - --cohere-format
+      - cmd4
+      - --reasoning-config
+      - '{"reasoning_start_str":"<|START_THINKING|>","reasoning_end_str":"<|END_THINKING|>"}'
       - --host
       - 0.0.0.0
       - --port
@@ -78,8 +82,12 @@ services:
       - --enable-auto-tool-choice
       - --tool-call-parser
       - cohere_command4
-      - --reasoning-parser
-      - cohere_command4
+      - --tokenizer-mode
+      - cohere
+      - --cohere-format
+      - cmd4
+      - --reasoning-config
+      - '{"reasoning_start_str":"<|START_THINKING|>","reasoning_end_str":"<|END_THINKING|>"}'
       - --host
       - 0.0.0.0
       - --port

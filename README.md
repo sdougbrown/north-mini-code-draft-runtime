@@ -82,8 +82,7 @@ docker compose --profile dspark up -d dspark
 docker compose --profile dflash --profile dspark up -d
 ```
 
-Both services default to TP=1, `VLLM_USE_V2_MODEL_RUNNER=1`, and the Cohere
-Command 4 reasoning/tool parsers. They mount the configured model root
+Both services default to TP=1, `VLLM_USE_V2_MODEL_RUNNER=1`, and Cohere's Command 4 parsers with the native Cohere tokenizer/format (`--tokenizer-mode cohere --cohere-format cmd4`) and reasoning-config start/end markers (`<|START_THINKING|>` / `<|END_THINKING|>`). They mount the configured model root
 read-only and persist caches in named volumes. They use all GPUs, host IPC, and
 health checks on separate host ports. GPU memory fraction defaults to 0.75;
 lower it when sharing the accelerator.

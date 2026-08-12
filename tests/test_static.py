@@ -87,7 +87,12 @@ class OverlayRecipeTests(unittest.TestCase):
         self.assertIn("${DFLASH_MODEL:?", self.compose)
         self.assertIn("${DSPARK_MODEL:?", self.compose)
         self.assertEqual(self.compose.count("--tool-call-parser"), 2)
-        self.assertEqual(self.compose.count("--reasoning-parser"), 2)
+        # Cohere native reasoning format (no --reasoning-parser)
+        self.assertEqual(self.compose.count("--tokenizer-mode"), 2)
+        self.assertEqual(self.compose.count("--cohere-format"), 2)
+        self.assertEqual(self.compose.count("--reasoning-config"), 2)
+        self.assertIn("<|START_THINKING|>", self.compose)
+        self.assertNotIn("--reasoning-parser", self.compose)
         self.assertIn("${GPU_MEMORY_UTILIZATION:-0.75}", self.compose)
         self.assertNotIn("--speculative-config", self.compose)
 
