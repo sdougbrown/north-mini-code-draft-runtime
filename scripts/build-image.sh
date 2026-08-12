@@ -9,11 +9,12 @@ readonly VLLM_COMMIT="83ad767eed3be3ee7f2df63be693bfaca5c7c922"
 readonly REQUIRED_PATCH="$ROOT/patches/49819-cohere2moe-eagle3-aux-states.patch"
 readonly OPTIONAL_PATCH="$ROOT/patches/optional-command4-mixed-transition.patch"
 
-# CUDA arch coverage. Default includes 12.1 so one image runs on RTX 3090
-# (sm86), GB10 (sm121), and the wider Blackwell/Arm-family range. Override
-# with TORCH_CUDA_ARCH_LIST to tune the build. The resulting tag encodes the
-# arch list so published images can be identified by what they actually run on.
-readonly DEFAULT_ARCH_LIST='7.5 8.0 8.6 8.9 9.0 10.0 11.0 12.0 12.1'
+# CUDA arch coverage. Default targets the validated fleet (RTX 3090 sm86 +
+# GB10 sm121) so compile time stays bounded while one image runs on both.
+# Widen with TORCH_CUDA_ARCH_LIST for broader public portability (e.g.
+# '7.5 8.0 8.6 8.9 9.0 10.0 11.0 12.0 12.1'). The tag encodes the compiled
+# arch list so published images identify what they actually run on.
+readonly DEFAULT_ARCH_LIST='8.6 12.1'
 ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-$DEFAULT_ARCH_LIST}
 
 usage() {
